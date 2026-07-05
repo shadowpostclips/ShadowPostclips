@@ -1,7 +1,8 @@
 import os
 import time
 from supabase import create_client, Client
-from openai import OpenAI
+# Import your brand new video rendering logic!
+from video_processor import VideoProcessor
 
 # 1. Boot up and load your environment secret keys
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
@@ -11,15 +12,16 @@ if not SUPABASE_URL or not SUPABASE_KEY:
     print("❌ Error: Missing Supabase connection keys in environment.")
     exit(1)
 
-# Initialize cloud database connections
+# Initialize cloud database and video processors
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+processor = VideoProcessor()
 print("⚡ ShadowPostclips Engine initialized successfully.")
 
 def check_for_video_jobs():
     """Scans your Supabase database for queued automation tasks"""
     print("🔍 Scanning database for 'queued' rendering tasks...")
     
-    # Query the video_jobs table we built in Step 1A
+    # Query the video_jobs table
     jobs = supabase.table("video_jobs").select("*").eq("status", "queued").execute()
     
     if len(jobs.data) == 0:
@@ -31,18 +33,25 @@ def check_for_video_jobs():
         topic = job["topic"]
         print(f"🚀 Found job {job_id} for topic: '{topic}'. Processing...")
         
-        # Update status to processing so engines don't overlap
-        supabase.table("video_jobs").update({"status": "processing"}).eq("id", job_id).execute()
-        
-        # (Media compilation and generation workflows will execute here next)
-        time.sleep(2) 
-        
-        # Complete the job pipeline
-        supabase.table("video_jobs").update({"status": "completed"}).eq("id", job_id).execute()
-        print(f"✅ Job {job_id} successfully rendered and closed.")
+        try:
+            # Update status to processing so engines don't overlap
+            supabase.table("video_jobs").update({"status": "processing"}).eq("id", job_id).execute()
+            
+            # Step A: Synthesize the AI Voice Track using the topic text as the script
+            audio_path = processor.generate_voiceover(topic, job_id)
+            
+            # Step B: Slice, crop, and compile the final short MP4 file
+            final_mp4_path = processor.compile_short(audio_path, job_id)
+            
+            # Update database status to completed
+            supabase.table("video_jobs").update({"status": "completed"}).eq("id", job_id).execute()
+            print(f"✅ Job {job_id} successfully rendered and closed.")
+            
+        except Exception as job_error:
+            print(f"❌ Failed rendering job {job_id}: {job_error}")
+            supabase.table("video_jobs").update({"status": "failed"}).eq("id", job_id).execute()
 
 if __name__ == "__main__":
-    # Run a continuous loop checking for new requests every 10 seconds
     while True:
         try:
             check_for_video_jobs()
